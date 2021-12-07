@@ -1,85 +1,75 @@
 setwd("/Users/sunwoojung/downloads")
-dat <- read.csv("framingham.csv", header = T)
-temp <- na.omit(dat)
 
-full <- glm(TenYearCHD ~ ., data = temp, family = "binomial")
+dat <- read.csv("hospital_mortality.csv", header = T)
+ind <- which(colSums(is.na(dat))> 100)
+temp <- na.omit(dat[,-ind])
 
-# VIF diagnosis
+full <- glm(outcome ~ ., data = temp, family = "binomial")
+summary(full)
+
+
+## VIF diagnosis ##
 car::vif(full)
-reduced <- glm(TenYearCHD ~ . - cigsPerDay, data = temp, family = "binomial")
-car::vif(reduced)
-reduced <- glm(TenYearCHD ~ . - glucose, data = temp, family = "binomial")
-car::vif(reduced)
-reduced <- glm(TenYearCHD ~ . - sysBP - prevalentHyp, data = temp, family = "binomial")
-car::vif(reduced)
 
 
-# glucose, cigsPerDay, sysBP explain variations of others
-reduced <- glm(TenYearCHD ~ . - glucose - cigsPerDay - sysBP, data = temp, family = "binomial")
-
-# variable selection
-step <- step(fit, direction="both")
+## variable selection ##
+step <- step(full, direction="both")
 
 
-# randomize currentSmoker and diabetes
-set.seed(100)
-ind_smok <- sample(1:nrow(temp), 1788)
-ind_diab <- sample(1:nrow(temp), 99)
-
-temp2 <- temp
-temp2$currentSmoker[ind_smok] <- 1
-temp2$currentSmoker[-ind_smok] <- 0
-temp2$diabetes[ind_diab] <- 1
-temp2$diabetes[-ind_diab] <- 0
-
-rand <- glm(TenYearCHD ~ ., data = temp2, family = "binomial")
-summary(rand)
-rand <- glm(TenYearCHD ~ . - glucose - cigsPerDay, data = temp2, family = "binomial")
-summary(rand)
-
-
-# shrinkage models
+## shrinkage models ##
 library(glmnet)
-rmse <- function(x,y) {sqrt(mean((x-y)^2))}
-set.seed(100)
+library(ModelMetrics)
+
+set.seed(105)
 ind <- sample(1:nrow(temp), round(0.7*nrow(temp)))
 train <- temp[ind,]
 test <- temp[-ind,]
 
-train_X <- as.matrix(train[,-16])
-train_Y <- train$TenYearCHD
-test_X <- as.matrix(test[,-16])
-test_Y <- test$TenYearCHD
+train_X <- as.matrix(train[,-3])
+train_Y <- train$outcome
+test_X <- as.matrix(test[,-3])
+test_Y <- test$outcome
 
 # simple LM
-fit <- lm(TenYearCHD ~., data = train)
-r1 <- rmse(predict(fit, test), test$TenYearCHD)
+fit <- glm(outcome ~., data = train, family = "binomial")
+auc1 <- auc(test$outcome, predict(fit, test))
 
 # stepwise variable selection (AIC)
 fit_step <- step(fit, direction = "both")
-r2 <- rmse(predict(fit_step, test), test$TenYearCHD)
+auc2 <- auc(test$outcome, predict(fit_step, test))
 
 # ridge 
-cv_out <- cv.glmnet(train_X, train_Y, alpha = 0, nfolds = 10)
+cv_out <- cv.glmnet(train_X, train_Y, alpha = 0, nfolds = 10, family = "binomial")
 lamb <- cv_out$lambda.min
-fit_ridge <- glmnet(train_X, train_Y, alpha = 0, lambda = lamb)
+fit_ridge <- glmnet(train_X, train_Y, alpha = 0, lambda = lamb, family = "binomial")
 y_pred <- predict(fit_ridge, test_X)
-r3 <- rmse(y_pred, test_Y)
+auc3 <- auc(test_Y, y_pred)
+
 
 # LASSO
-cv_out <- cv.glmnet(train_X, train_Y, alpha = 1, nfolds = 10)
+cv_out <- cv.glmnet(train_X, train_Y, alpha = 1, nfolds = 10, family = "binomial")
 lamb <- cv_out$lambda.min
-fit_lasso <- glmnet(train_X, train_Y, alpha = 1, lambda = lamb)
+fit_lasso <- glmnet(train_X, train_Y, alpha = 1, lambda = lamb, family = "binomial")
 y_pred <- predict(fit_lasso, test_X)
-r4 <- rmse(y_pred, test_Y)
+auc4 <- auc(test_Y, y_pred)
 
 # elastic net
-cv_out <- cv.glmnet(train_X, train_Y, alpha = 0.5, nfolds = 10)
+cv_out <- cv.glmnet(train_X, train_Y, alpha = 0.5, nfolds = 10, family = "binomial")
 lamb <- cv_out$lambda.min
-fit_elastic <- glmnet(train_X, train_Y, alpha = 0.5, lambda = lamb)
+fit_elastic <- glmnet(train_X, train_Y, alpha = 0.5, lambda = lamb, family = "binomial")
 y_pred <- predict(fit_elastic, test_X)
-r5 <- rmse(y_pred, test_Y)
+auc5 <- auc(test_Y, y_pred)
 
+# results
 models <- c("LM", "step", "ridge", "LASSO", "elastic_net")
-rmse_vec <- c(r1, r2, r3, r4, r5)
-rmse_table <- data.frame(model = models, rmse = rmse_vec)
+auc_vec <- c(auc1, auc2, auc3, auc4, auc5)
+auc_table <- data.frame(model = models, auc = auc_vec)
+auc_table
+
+
+## selected variables by step_AIC and LASSO
+beta <- fit_lasso$beta
+# by LASSO
+names(beta[which(abs(beta[,1]) > 0.0000000000001),])
+# by stepwise(AIC)
+names(fit_step$coefficients)
